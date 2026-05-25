@@ -1,123 +1,130 @@
-// ─────────────────────────────────────────────────────────────
-//  storage.js — Firebase Firestore
-//  Substitui o localStorage por dados em tempo real na nuvem.
-//  Troque os valores de firebaseConfig pelos do SEU projeto.
-// ─────────────────────────────────────────────────────────────
- 
 import { initializeApp } from 'firebase/app'
 import {
-  getFirestore,
-  collection,
-  doc,
-  getDocs,
-  getDoc,
-  setDoc,
-  deleteDoc,
-  onSnapshot,
-  query,
-  where,
+  getFirestore, collection, doc,
+  getDocs, getDoc, setDoc, deleteDoc, onSnapshot,
 } from 'firebase/firestore'
- 
-// ─── 1. CONFIGURAÇÃO ─────────────────────────────────────────
-// Cole aqui os dados do seu projeto Firebase
-// (você pega isso em: Firebase Console → Seu Projeto → Configurações → Seus apps)
+
 const firebaseConfig = {
-  apiKey: "AIzaSyA9dZjJHvNknlzzk5CKWV7LZtlPWzFb2GI",
-  authDomain: "sistematiza-comandas.firebaseapp.com",
-  projectId: "sistematiza-comandas",
-  storageBucket: "sistematiza-comandas.firebasestorage.app",
-  messagingSenderId: "63337414601",
-  appId: "1:63337414601:web:07fbef18c64df41bfe3218"
-};
+  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId:             import.meta.env.VITE_FIREBASE_APP_ID,
+}
 
-
- 
 const app = initializeApp(firebaseConfig)
 const db  = getFirestore(app)
- 
-// ─── 2. CONSTANTES ───────────────────────────────────────────
+
+// ─── CONSTANTES ───────────────────────────────────────────────
 export const formasPagamento = ['Pix', 'Dinheiro', 'Cartão de crédito', 'Cartão de débito']
- 
+
 export const categorias = [
   { key: 'comidas',  label: 'Comidas',  emoji: '🍽️' },
   { key: 'bebidas',  label: 'Bebidas',  emoji: '🍺' },
   { key: 'diversos', label: 'Diversos', emoji: '📦' },
 ]
- 
-// ─── 3. HELPERS ──────────────────────────────────────────────
+
+export const categoriasFinanceiro = [
+  { key: 'aluguel',       label: 'Aluguel',         emoji: '🏢', tipo: 'despesa' },
+  { key: 'energia',       label: 'Energia elétrica', emoji: '⚡', tipo: 'despesa' },
+  { key: 'agua',          label: 'Água',             emoji: '💧', tipo: 'despesa' },
+  { key: 'funcionarios',  label: 'Funcionários',     emoji: '👥', tipo: 'despesa' },
+  { key: 'estoque',       label: 'Compra de estoque',emoji: '📦', tipo: 'despesa' },
+  { key: 'manutencao',    label: 'Manutenção',       emoji: '🔧', tipo: 'despesa' },
+  { key: 'marketing',     label: 'Marketing',        emoji: '📣', tipo: 'despesa' },
+  { key: 'taxas',         label: 'Taxas e impostos', emoji: '🧾', tipo: 'despesa' },
+  { key: 'outros_desp',   label: 'Outras despesas',  emoji: '💸', tipo: 'despesa' },
+  { key: 'mensalidade',   label: 'Mensalidade',      emoji: '📅', tipo: 'receita' },
+  { key: 'aluguel_quadra',label: 'Aluguel de quadra',emoji: '⚽', tipo: 'receita' },
+  { key: 'evento',        label: 'Evento',            emoji: '🎉', tipo: 'receita' },
+  { key: 'outros_rec',    label: 'Outras receitas',  emoji: '💰', tipo: 'receita' },
+]
+
+// Taxas de cartão padrão (configuráveis pelo usuário)
+export const taxasCartaoPadrao = {
+  credito: 2.99,
+  debito:  1.49,
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────
 export const fmt = (v) =>
   `R$ ${parseFloat(v || 0).toFixed(2).replace('.', ',')}`
- 
+
+export const fmtNum = (v) =>
+  parseFloat(v || 0).toFixed(2).replace('.', ',')
+
 export const getTotalComanda = (comanda) =>
   comanda.itens.reduce((acc, item) => acc + item.quantidade * item.preco, 0)
- 
+
 export const getMesaStatus = (mesaId, comandas) => {
   const abertas = comandas.filter(c => c.mesaId === mesaId && c.status === 'aberta')
   return abertas.length === 0 ? 'livre' : 'ocupada'
 }
- 
-// ─── 4. CONFIG DO ESTABELECIMENTO ────────────────────────────
-// Salvo como documento único: config/estabelecimento
+
+export const getTaxaCartao = (formaPagamento, taxas = taxasCartaoPadrao) => {
+  if (formaPagamento === 'Cartão de crédito') return taxas.credito
+  if (formaPagamento === 'Cartão de débito')  return taxas.debito
+  return 0
+}
+
+export const getValorLiquido = (valorBruto, formaPagamento, taxas) => {
+  const taxa = getTaxaCartao(formaPagamento, taxas)
+  return valorBruto * (1 - taxa / 100)
+}
+
+// ─── CONFIG ──────────────────────────────────────────────────
 export const getConfig = async () => {
   const snap = await getDoc(doc(db, 'config', 'estabelecimento'))
   return snap.exists() ? snap.data() : null
 }
- 
 export const saveConfig = async (dados) => {
   await setDoc(doc(db, 'config', 'estabelecimento'), dados)
 }
- 
-// ─── 5. MESAS ────────────────────────────────────────────────
+
+// Config financeira (taxas, CNPJ, endereço)
+export const getConfigFinanceira = async () => {
+  const snap = await getDoc(doc(db, 'config', 'financeiro'))
+  return snap.exists() ? snap.data() : {
+    cnpj: '', endereco: '', cidade: '', telefone: '',
+    taxaCredito: 2.99, taxaDebito: 1.49,
+    razaoSocial: '',
+  }
+}
+export const saveConfigFinanceira = async (dados) => {
+  await setDoc(doc(db, 'config', 'financeiro'), dados)
+}
+
+// ─── MESAS ───────────────────────────────────────────────────
 const mesasIniciais = [
   { id: '1', numero: 1 }, { id: '2', numero: 2 },
   { id: '3', numero: 3 }, { id: '4', numero: 4 },
   { id: '5', numero: 5 }, { id: '6', numero: 6 },
   { id: '7', numero: 7 }, { id: '8', numero: 8 },
 ]
- 
-// Leitura única (usada no carregamento inicial)
+
 export const getMesas = async () => {
   const snap = await getDocs(collection(db, 'mesas'))
   if (snap.empty) {
-    // Primeira vez: salva as mesas iniciais
-    for (const mesa of mesasIniciais) {
-      await setDoc(doc(db, 'mesas', mesa.id), mesa)
-    }
+    for (const mesa of mesasIniciais) await setDoc(doc(db, 'mesas', mesa.id), mesa)
     return mesasIniciais
   }
   return snap.docs.map(d => d.data()).sort((a, b) => a.numero - b.numero)
 }
- 
-export const saveMesa = async (mesa) => {
-  await setDoc(doc(db, 'mesas', String(mesa.id)), mesa)
-}
- 
-export const deleteMesa = async (mesaId) => {
-  await deleteDoc(doc(db, 'mesas', String(mesaId)))
-}
- 
-// Listener em tempo real para mesas
-export const onMesasChange = (callback) => {
-  return onSnapshot(collection(db, 'mesas'), (snap) => {
-    const mesas = snap.docs.map(d => d.data()).sort((a, b) => a.numero - b.numero)
-    callback(mesas)
-  })
-}
- 
-// ─── 6. COMANDAS ─────────────────────────────────────────────
-export const saveComanda = async (comanda) => {
-  await setDoc(doc(db, 'comandas', String(comanda.id)), comanda)
-}
- 
-// Listener em tempo real para comandas
-export const onComandasChange = (callback) => {
-  return onSnapshot(collection(db, 'comandas'), (snap) => {
-    const comandas = snap.docs.map(d => d.data())
-    callback(comandas)
-  })
-}
- 
-// ─── 7. CARDÁPIO ─────────────────────────────────────────────
+export const saveMesa   = async (mesa)   => setDoc(doc(db, 'mesas', String(mesa.id)), mesa)
+export const deleteMesa = async (id)     => deleteDoc(doc(db, 'mesas', String(id)))
+export const onMesasChange = (cb) =>
+  onSnapshot(collection(db, 'mesas'), snap =>
+    cb(snap.docs.map(d => d.data()).sort((a, b) => a.numero - b.numero)))
+
+// ─── COMANDAS ────────────────────────────────────────────────
+export const saveComanda = async (comanda) =>
+  setDoc(doc(db, 'comandas', String(comanda.id)), comanda)
+
+export const onComandasChange = (cb) =>
+  onSnapshot(collection(db, 'comandas'), snap => cb(snap.docs.map(d => d.data())))
+
+// ─── CARDÁPIO ────────────────────────────────────────────────
 const cardapioInicial = [
   { id: '1', nome: 'Cerveja 600ml',      preco: 12.00, categoria: 'bebidas' },
   { id: '2', nome: 'Refrigerante Lata',  preco: 6.00,  categoria: 'bebidas' },
@@ -126,30 +133,25 @@ const cardapioInicial = [
   { id: '5', nome: 'Porção de Fritas',   preco: 18.00, categoria: 'comidas' },
   { id: '6', nome: 'Carvão',             preco: 5.00,  categoria: 'diversos' },
 ]
- 
+
 export const getCardapio = async () => {
   const snap = await getDocs(collection(db, 'cardapio'))
   if (snap.empty) {
-    for (const item of cardapioInicial) {
-      await setDoc(doc(db, 'cardapio', item.id), item)
-    }
+    for (const item of cardapioInicial) await setDoc(doc(db, 'cardapio', item.id), item)
     return cardapioInicial
   }
   return snap.docs.map(d => d.data())
 }
- 
-export const saveItemCardapio = async (item) => {
-  await setDoc(doc(db, 'cardapio', String(item.id)), item)
-}
- 
-export const deleteItemCardapio = async (itemId) => {
-  await deleteDoc(doc(db, 'cardapio', String(itemId)))
-}
- 
-// Listener em tempo real para cardápio
-export const onCardapioChange = (callback) => {
-  return onSnapshot(collection(db, 'cardapio'), (snap) => {
-    const cardapio = snap.docs.map(d => d.data())
-    callback(cardapio)
-  })
-}
+export const saveItemCardapio   = async (item) => setDoc(doc(db, 'cardapio', String(item.id)), item)
+export const deleteItemCardapio = async (id)   => deleteDoc(doc(db, 'cardapio', String(id)))
+export const onCardapioChange   = (cb) =>
+  onSnapshot(collection(db, 'cardapio'), snap => cb(snap.docs.map(d => d.data())))
+
+// ─── LANÇAMENTOS FINANCEIROS ─────────────────────────────────
+// { id, tipo: 'despesa'|'receita', categoria, descricao, valor,
+//   vencimento, status: 'pendente'|'pago'|'recebido', dataPagamento,
+//   recorrente: bool, createdAt }
+export const saveLancamento   = async (l)  => setDoc(doc(db, 'lancamentos', String(l.id)), l)
+export const deleteLancamento = async (id) => deleteDoc(doc(db, 'lancamentos', String(id)))
+export const onLancamentosChange = (cb) =>
+  onSnapshot(collection(db, 'lancamentos'), snap => cb(snap.docs.map(d => d.data())))
