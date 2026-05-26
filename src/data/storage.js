@@ -1,253 +1,156 @@
-import { useState } from 'react'
-import { fmt, getTotalComanda, categorias } from '../../data/storage'
+import { initializeApp } from 'firebase/app'
+import {
+  getFirestore, collection, doc,
+  getDocs, getDoc, setDoc, deleteDoc, onSnapshot,
+} from 'firebase/firestore'
 
-function NovaComandaForm({ onConfirmar, onCancelar }) {
-  const [nome, setNome] = useState('')
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(22,22,22,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, backdropFilter: 'blur(2px)', padding: '16px' }}>
-      <div style={{ background: 'var(--bg-layer-01)', borderRadius: 'var(--radius-xl)', padding: '28px', maxWidth: '380px', width: '100%', boxShadow: 'var(--shadow-lg)' }}>
-        <p style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '6px' }}>Nova comanda</p>
-        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px' }}>Informe o nome do cliente para abrir a comanda.</p>
-        <input
-          value={nome}
-          onChange={e => setNome(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && nome.trim() && onConfirmar(nome.trim())}
-          placeholder="Nome do cliente"
-          autoFocus
-          style={{ width: '100%', padding: '10px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '14px', color: 'var(--text-primary)', outline: 'none', marginBottom: '16px', fontFamily: 'DM Sans, sans-serif', boxSizing: 'border-box' }}
-          onFocus={e => e.target.style.borderColor = 'var(--brand)'}
-          onBlur={e => e.target.style.borderColor = 'var(--border-subtle)'} />
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={onCancelar} className="btn-secondary" style={{ flex: 1, padding: '10px' }}>Cancelar</button>
-          <button onClick={() => nome.trim() && onConfirmar(nome.trim())} className="btn-primary" style={{ flex: 1, padding: '10px' }}>Abrir</button>
-        </div>
-      </div>
-    </div>
-  )
+const firebaseConfig = {
+  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId:             import.meta.env.VITE_FIREBASE_APP_ID,
 }
 
-function SeletorItens({ cardapio, onConfirmar, onCancelar }) {
-  const [categoriaAtiva, setCategoriaAtiva] = useState('comidas')
-  const [quantidades, setQuantidades]       = useState({})
+const app = initializeApp(firebaseConfig)
+const db  = getFirestore(app)
 
-  const setQtd = (id, val) => {
-    const novo = Math.max(0, val)
-    setQuantidades(q => ({ ...q, [String(id)]: novo }))
+// ─── CONSTANTES ───────────────────────────────────────────────
+export const formasPagamento = ['Pix', 'Dinheiro', 'Cartão de crédito', 'Cartão de débito']
+
+export const categorias = [
+  { key: 'comidas',  label: 'Comidas',  emoji: '🍽️' },
+  { key: 'bebidas',  label: 'Bebidas',  emoji: '🍺' },
+  { key: 'diversos', label: 'Diversos', emoji: '📦' },
+]
+
+export const categoriasFinanceiro = [
+  { key: 'aluguel',        label: 'Aluguel',          emoji: '🏢', tipo: 'despesa' },
+  { key: 'energia',        label: 'Energia elétrica',  emoji: '⚡', tipo: 'despesa' },
+  { key: 'agua',           label: 'Água',              emoji: '💧', tipo: 'despesa' },
+  { key: 'funcionarios',   label: 'Funcionários',      emoji: '👥', tipo: 'despesa' },
+  { key: 'estoque',        label: 'Compra de estoque', emoji: '📦', tipo: 'despesa' },
+  { key: 'manutencao',     label: 'Manutenção',        emoji: '🔧', tipo: 'despesa' },
+  { key: 'marketing',      label: 'Marketing',         emoji: '📣', tipo: 'despesa' },
+  { key: 'taxas',          label: 'Taxas e impostos',  emoji: '🧾', tipo: 'despesa' },
+  { key: 'outros_desp',    label: 'Outras despesas',   emoji: '💸', tipo: 'despesa' },
+  { key: 'mensalidade',    label: 'Mensalidade',       emoji: '📅', tipo: 'receita' },
+  { key: 'aluguel_quadra', label: 'Aluguel de quadra', emoji: '⚽', tipo: 'receita' },
+  { key: 'evento',         label: 'Evento',            emoji: '🎉', tipo: 'receita' },
+  { key: 'outros_rec',     label: 'Outras receitas',   emoji: '💰', tipo: 'receita' },
+]
+
+export const taxasCartaoPadrao = { credito: 2.99, debito: 1.49 }
+
+// ─── HELPERS ─────────────────────────────────────────────────
+export const fmt = (v) =>
+  `R$ ${parseFloat(v || 0).toFixed(2).replace('.', ',')}`
+
+export const getTotalComanda = (comanda) =>
+  comanda.itens.reduce((acc, item) => acc + item.quantidade * item.preco, 0)
+
+export const getMesaStatus = (mesaId, comandas) => {
+  const abertas = comandas.filter(c => c.mesaId === mesaId && c.status === 'aberta')
+  return abertas.length === 0 ? 'livre' : 'ocupada'
+}
+
+export const getTaxaCartao = (formaPagamento, taxas = taxasCartaoPadrao) => {
+  if (formaPagamento === 'Cartão de crédito') return taxas.credito
+  if (formaPagamento === 'Cartão de débito')  return taxas.debito
+  return 0
+}
+
+export const getValorLiquido = (valorBruto, formaPagamento, taxas) => {
+  const taxa = getTaxaCartao(formaPagamento, taxas)
+  return valorBruto * (1 - taxa / 100)
+}
+
+// ─── CONFIG ──────────────────────────────────────────────────
+export const getConfig = async () => {
+  const snap = await getDoc(doc(db, 'config', 'estabelecimento'))
+  return snap.exists() ? snap.data() : null
+}
+export const saveConfig = async (dados) =>
+  setDoc(doc(db, 'config', 'estabelecimento'), dados)
+
+export const getConfigFinanceira = async () => {
+  const snap = await getDoc(doc(db, 'config', 'financeiro'))
+  return snap.exists() ? snap.data() : {
+    cnpj: '', endereco: '', cidade: '', telefone: '',
+    taxaCredito: 2.99, taxaDebito: 1.49, razaoSocial: '',
   }
+}
+export const saveConfigFinanceira = async (dados) =>
+  setDoc(doc(db, 'config', 'financeiro'), dados)
 
-  // ✅ BUG FIX: comparação por String(id) em vez de parseInt
-  const itensSelecionados = Object.entries(quantidades)
-    .filter(([, qtd]) => qtd > 0)
-    .map(([id, qtd]) => {
-      const item = cardapio.find(i => String(i.id) === String(id))
-      if (!item) return null
-      return { ...item, quantidade: qtd }
-    })
-    .filter(Boolean)
+// ─── MESAS ───────────────────────────────────────────────────
+const mesasIniciais = [
+  { id: '1', numero: 1 }, { id: '2', numero: 2 },
+  { id: '3', numero: 3 }, { id: '4', numero: 4 },
+  { id: '5', numero: 5 }, { id: '6', numero: 6 },
+  { id: '7', numero: 7 }, { id: '8', numero: 8 },
+]
 
-  const totalSelecionado = itensSelecionados.reduce((acc, i) => acc + i.quantidade * i.preco, 0)
-  const itensFiltrados   = cardapio.filter(i => i.categoria === categoriaAtiva)
-
-  const confirmar = () => {
-    if (itensSelecionados.length === 0) return alert('Selecione pelo menos um item!')
-    onConfirmar(itensSelecionados)
+export const getMesas = async () => {
+  const snap = await getDocs(collection(db, 'mesas'))
+  if (snap.empty) {
+    for (const mesa of mesasIniciais) await setDoc(doc(db, 'mesas', mesa.id), mesa)
+    return mesasIniciais
   }
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(22,22,22,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 999, backdropFilter: 'blur(2px)' }}>
-      <div style={{ background: 'var(--bg-layer-01)', borderRadius: 'var(--radius-xl) var(--radius-xl) 0 0', width: '100%', maxWidth: '600px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: 'var(--shadow-lg)', overflow: 'hidden' }}>
-
-        <div style={{ padding: '20px 20px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <p style={{ fontSize: '17px', fontWeight: '700', color: 'var(--text-primary)' }}>Adicionar itens</p>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>Selecione os itens do cardápio.</p>
-          </div>
-          <button onClick={onCancelar} style={{ background: 'var(--bg-primary)', border: 'none', borderRadius: 'var(--radius-full)', width: '32px', height: '32px', cursor: 'pointer', fontSize: '16px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
-        </div>
-
-        {/* Tabs categorias */}
-        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '6px', overflowX: 'auto' }}>
-          {categorias.map(cat => {
-            const ativo = categoriaAtiva === cat.key
-            return (
-              <button key={cat.key} onClick={() => setCategoriaAtiva(cat.key)}
-                style={{ background: ativo ? 'var(--brand)' : 'var(--bg-primary)', border: `1px solid ${ativo ? 'var(--brand)' : 'var(--border-subtle)'}`, borderRadius: 'var(--radius-full)', padding: '6px 14px', fontSize: '12px', fontWeight: ativo ? '600' : '400', cursor: 'pointer', color: ativo ? '#fff' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '5px', transition: 'all 0.15s', fontFamily: 'DM Sans, sans-serif', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                <span>{cat.emoji}</span><span>{cat.label}</span>
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Lista de itens */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {itensFiltrados.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-secondary)' }}>
-              <p style={{ fontSize: '13px' }}>Nenhum item nesta categoria.</p>
-            </div>
-          ) : (
-            itensFiltrados.map((item, idx) => {
-              const qtd = quantidades[String(item.id)] || 0
-              return (
-                <div key={item.id}
-                  style={{ padding: '14px 20px', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: idx < itensFiltrados.length - 1 ? '1px solid var(--border-subtle)' : 'none', background: qtd > 0 ? 'var(--brand-light)' : 'transparent', transition: 'background 0.15s' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)' }}>{item.nome}</p>
-                    <p style={{ fontSize: '13px', fontWeight: '700', color: qtd > 0 ? 'var(--brand)' : 'var(--text-secondary)', marginTop: '1px' }}>{fmt(item.preco)}</p>
-                  </div>
-                  {/* Controle de quantidade */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-                    <button onClick={() => setQtd(item.id, qtd - 1)}
-                      style={{ width: '34px', height: '34px', borderRadius: 'var(--radius-sm)', background: qtd > 0 ? 'var(--brand)' : 'var(--bg-layer-02)', border: 'none', cursor: 'pointer', fontSize: '18px', fontWeight: '700', color: qtd > 0 ? '#fff' : 'var(--text-placeholder)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'DM Sans, sans-serif' }}>−</button>
-                    <span style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)', minWidth: '24px', textAlign: 'center' }}>{qtd}</span>
-                    <button onClick={() => setQtd(item.id, qtd + 1)}
-                      style={{ width: '34px', height: '34px', borderRadius: 'var(--radius-sm)', background: 'var(--brand)', border: 'none', cursor: 'pointer', fontSize: '18px', fontWeight: '700', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'DM Sans, sans-serif' }}>+</button>
-                  </div>
-                  {qtd > 0 && (
-                    <p style={{ fontSize: '13px', fontWeight: '700', color: 'var(--brand)', minWidth: '64px', textAlign: 'right', flexShrink: 0 }}>{fmt(qtd * item.preco)}</p>
-                  )}
-                </div>
-              )
-            })
-          )}
-        </div>
-
-        {/* Footer */}
-        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-primary)' }}>
-          {itensSelecionados.length > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                {itensSelecionados.reduce((a, i) => a + i.quantidade, 0)} iten(s) selecionado(s)
-              </span>
-              <span style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-primary)' }}>{fmt(totalSelecionado)}</span>
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={onCancelar} className="btn-secondary" style={{ flex: 1, padding: '12px' }}>Cancelar</button>
-            <button onClick={confirmar} className="btn-primary" style={{ flex: 2, padding: '12px', fontSize: '14px' }}>
-              Adicionar {itensSelecionados.length > 0 ? `(${fmt(totalSelecionado)})` : ''}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
+  return snap.docs.map(d => d.data()).sort((a, b) => a.numero - b.numero)
 }
+export const saveMesa   = async (mesa) => setDoc(doc(db, 'mesas', String(mesa.id)), mesa)
+export const deleteMesa = async (id)   => deleteDoc(doc(db, 'mesas', String(id)))
+export const onMesasChange = (cb) =>
+  onSnapshot(collection(db, 'mesas'), snap =>
+    cb(snap.docs.map(d => d.data()).sort((a, b) => a.numero - b.numero)))
 
-export default function Comanda({ mesa, comandas, cardapio, onNovaComanda, onAdicionarItens, onRemoverItem, onFecharConta, onVoltar }) {
-  const [showNovaComanda, setShowNovaComanda] = useState(false)
-  const [showSeletor, setShowSeletor]         = useState(false)
-  const [comandaAtiva, setComandaAtiva]       = useState(null)
+// ─── COMANDAS ────────────────────────────────────────────────
+export const saveComanda = async (comanda) =>
+  setDoc(doc(db, 'comandas', String(comanda.id)), comanda)
+export const onComandasChange = (cb) =>
+  onSnapshot(collection(db, 'comandas'), snap => cb(snap.docs.map(d => d.data())))
 
-  const comanda = comandaAtiva
-    ? comandas.find(c => c.id === comandaAtiva.id) || comandas[0]
-    : comandas[0]
+// ─── CARDÁPIO ────────────────────────────────────────────────
+const cardapioInicial = [
+  { id: '1', nome: 'Cerveja 600ml',      preco: 12.00, categoria: 'bebidas' },
+  { id: '2', nome: 'Refrigerante Lata',  preco: 6.00,  categoria: 'bebidas' },
+  { id: '3', nome: 'Água Mineral',       preco: 4.00,  categoria: 'bebidas' },
+  { id: '4', nome: 'Espetinho de Carne', preco: 8.00,  categoria: 'comidas' },
+  { id: '5', nome: 'Porção de Fritas',   preco: 18.00, categoria: 'comidas' },
+  { id: '6', nome: 'Carvão',             preco: 5.00,  categoria: 'diversos' },
+]
 
-  return (
-    <div className="page-content">
-
-      {showNovaComanda && (
-        <NovaComandaForm
-          onConfirmar={(nome) => { onNovaComanda(nome); setShowNovaComanda(false) }}
-          onCancelar={() => setShowNovaComanda(false)} />
-      )}
-
-      {showSeletor && comanda && (
-        <SeletorItens
-          cardapio={cardapio}
-          onConfirmar={(itens) => { onAdicionarItens(comanda, itens); setShowSeletor(false) }}
-          onCancelar={() => setShowSeletor(false)} />
-      )}
-
-      {/* Header */}
-      <div className="page-header">
-        <div>
-          <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-            <span style={{ cursor: 'pointer', color: 'var(--brand)' }} onClick={onVoltar}>← Voltar</span>
-          </p>
-          <h1 className="page-title">Mesa {mesa.numero}</h1>
-          <p className="page-subtitle">{comandas.length} comanda{comandas.length !== 1 ? 's' : ''} aberta{comandas.length !== 1 ? 's' : ''}</p>
-        </div>
-        <button className="btn-primary" onClick={() => setShowNovaComanda(true)}>+ Nova comanda</button>
-      </div>
-
-      {comandas.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '48px 24px', background: 'var(--bg-layer-01)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)' }}>
-          <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>🍺</div>
-          <p style={{ fontWeight: '600', fontSize: '16px', color: 'var(--text-primary)' }}>Mesa vazia</p>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '6px' }}>Abra uma comanda para começar a registrar pedidos.</p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
-          {/* Tabs de comandas (quando há mais de uma) */}
-          {comandas.length > 1 && (
-            <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
-              {comandas.map(c => {
-                const ativa = comanda?.id === c.id
-                return (
-                  <button key={c.id} onClick={() => setComandaAtiva(c)}
-                    style={{ background: ativa ? 'var(--brand-light)' : 'var(--bg-layer-01)', border: `1.5px solid ${ativa ? 'var(--brand)' : 'var(--border-subtle)'}`, borderRadius: 'var(--radius-lg)', padding: '10px 16px', cursor: 'pointer', transition: 'all 0.15s', flexShrink: 0, fontFamily: 'DM Sans, sans-serif', textAlign: 'left' }}>
-                    <p style={{ fontSize: '13px', fontWeight: '600', color: ativa ? 'var(--brand)' : 'var(--text-primary)' }}>{c.clienteNome}</p>
-                    <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '1px' }}>{fmt(getTotalComanda(c))}</p>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-
-          {/* Detalhe da comanda */}
-          {comanda && (
-            <div className="card">
-              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
-                <div>
-                  <p style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)' }}>{comanda.clienteNome}</p>
-                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>Aberta às {comanda.abertura}</p>
-                </div>
-                <button className="btn-primary" onClick={() => setShowSeletor(true)} style={{ padding: '8px 14px', fontSize: '13px', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                  + Itens
-                </button>
-              </div>
-
-              <div style={{ minHeight: '120px' }}>
-                {comanda.itens.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-secondary)' }}>
-                    <p style={{ fontSize: '13px' }}>Nenhum item adicionado ainda.</p>
-                  </div>
-                ) : (
-                  comanda.itens.map((item, idx) => (
-                    <div key={item.id}
-                      style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: idx < comanda.itens.length - 1 ? '1px solid var(--border-subtle)' : 'none' }}>
-                      <div style={{ width: '28px', height: '28px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: '700', color: 'var(--text-secondary)', flexShrink: 0 }}>
-                        {item.quantidade}x
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: '14px', fontWeight: '500', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.nome}</p>
-                        <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '1px' }}>{fmt(item.preco)} cada</p>
-                      </div>
-                      <p style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-primary)', flexShrink: 0 }}>{fmt(item.quantidade * item.preco)}</p>
-                      <button onClick={() => onRemoverItem(comanda, item.id)}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '16px', color: 'var(--text-placeholder)', padding: '4px', opacity: 0.5 }}
-                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                        onMouseLeave={e => e.currentTarget.style.opacity = '0.5'}>✕</button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-primary)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                  <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontWeight: '500' }}>Total</span>
-                  <span style={{ fontSize: '22px', fontWeight: '800', color: 'var(--text-primary)', letterSpacing: '-0.5px' }}>{fmt(getTotalComanda(comanda))}</span>
-                </div>
-                <button onClick={() => onFecharConta(comanda)}
-                  style={{ width: '100%', background: 'var(--text-primary)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', padding: '14px', fontSize: '15px', fontWeight: '700', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>
-                  Fechar conta
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
+export const getCardapio = async () => {
+  const snap = await getDocs(collection(db, 'cardapio'))
+  if (snap.empty) {
+    for (const item of cardapioInicial) await setDoc(doc(db, 'cardapio', item.id), item)
+    return cardapioInicial
+  }
+  return snap.docs.map(d => d.data())
 }
+export const saveItemCardapio   = async (item) => setDoc(doc(db, 'cardapio', String(item.id)), item)
+export const deleteItemCardapio = async (id)   => deleteDoc(doc(db, 'cardapio', String(id)))
+export const onCardapioChange   = (cb) =>
+  onSnapshot(collection(db, 'cardapio'), snap => cb(snap.docs.map(d => d.data())))
+
+// ─── LANÇAMENTOS FINANCEIROS ─────────────────────────────────
+export const saveLancamento   = async (l)  => setDoc(doc(db, 'lancamentos', String(l.id)), l)
+export const deleteLancamento = async (id) => deleteDoc(doc(db, 'lancamentos', String(id)))
+export const onLancamentosChange = (cb) =>
+  onSnapshot(collection(db, 'lancamentos'), snap => cb(snap.docs.map(d => d.data())))
+
+// ─── ESTOQUE ─────────────────────────────────────────────────
+// Produto: { id, nome, categoria, unidade, qtdAtual, qtdMinima, precoCusto }
+// Movimento: { id, produtoId, tipo: 'entrada'|'saida', quantidade, custo, obs, data, hora }
+
+export const saveEstoqueProduto   = async (p)  => setDoc(doc(db, 'estoque', String(p.id)), p)
+export const deleteEstoqueProduto = async (id) => deleteDoc(doc(db, 'estoque', String(id)))
+export const onEstoqueChange      = (cb) =>
+  onSnapshot(collection(db, 'estoque'), snap => cb(snap.docs.map(d => d.data())))
+
+export const saveMovimento = async (mov) =>
+  setDoc(doc(db, 'movimentos', String(mov.id)), mov)
+export const onMovimentosChange = (cb) =>
+  onSnapshot(collection(db, 'movimentos'), snap => cb(snap.docs.map(d => d.data())))
