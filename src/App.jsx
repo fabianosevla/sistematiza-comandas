@@ -5,7 +5,9 @@ import {
   getCardapio, saveItemCardapio, deleteItemCardapio, onCardapioChange,
   saveComanda, onComandasChange,
   saveLancamento, deleteLancamento, onLancamentosChange,
-  getTotalComanda, getMesaStatus, fmt,
+  saveEstoqueProduto, deleteEstoqueProduto, onEstoqueChange,
+  saveMovimento,
+  getTotalComanda, getMesaStatus,
 } from './data/storage'
 
 import Dashboard   from './components/Mesas/Dashboard'
@@ -15,6 +17,7 @@ import Relatorio   from './components/Relatorio/Relatorio'
 import Cardapio    from './components/Cardapio/Cardapio'
 import Financeiro  from './components/Financeiro/Financeiro'
 import Faturamento from './components/Faturamento/Faturamento'
+import Estoque     from './components/Estoque/Estoque'
 import LogoIcon    from './components/LogoIcon'
 
 const tipos = [
@@ -43,8 +46,8 @@ function SidebarLogo() {
 }
 
 function Setup({ onConcluir }) {
-  const [nome, setNome]     = useState('')
-  const [tipo, setTipo]     = useState('bar')
+  const [nome, setNome]       = useState('')
+  const [tipo, setTipo]       = useState('bar')
   const [loading, setLoading] = useState(false)
 
   const concluir = async () => {
@@ -112,11 +115,11 @@ function Loading() {
 }
 
 function UserMenu({ config, configFin, onSalvarConfig, onSalvarConfigFin }) {
-  const [open, setOpen]         = useState(false)
-  const [aba, setAba]           = useState('estabelecimento')
-  const [nome, setNome]         = useState(config.nome)
-  const [tipo, setTipo]         = useState(config.tipo)
-  const [fin, setFin]           = useState(configFin || {})
+  const [open, setOpen] = useState(false)
+  const [aba, setAba]   = useState('estabelecimento')
+  const [nome, setNome] = useState(config.nome)
+  const [tipo, setTipo] = useState(config.tipo)
+  const [fin, setFin]   = useState(configFin || {})
   const ref = useRef(null)
 
   useEffect(() => {
@@ -154,7 +157,6 @@ function UserMenu({ config, configFin, onSalvarConfig, onSalvarConfigFin }) {
             </div>
           </div>
 
-          {/* Abas */}
           <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)' }}>
             {[{ key: 'estabelecimento', label: 'Geral' }, { key: 'fiscal', label: 'Fiscal / Taxas' }].map(a => (
               <button key={a.key} onClick={() => setAba(a.key)}
@@ -263,11 +265,13 @@ const telaInfo = {
   relatorio:   { title: 'Relatório',    sub: 'Resumo do dia' },
   financeiro:  { title: 'Financeiro',   sub: 'Contas a pagar e receber' },
   faturamento: { title: 'Faturamento',  sub: 'Receita, despesas e lucro' },
+  estoque:     { title: 'Estoque',      sub: 'Controle de produtos do bar' },
 }
 
 const navItems = [
   { key: 'dashboard',   icon: '🏠', label: 'Mesas',       grupo: 'operação' },
   { key: 'cardapio',    icon: '🍽️', label: 'Cardápio',    grupo: 'operação' },
+  { key: 'estoque',     icon: '📦', label: 'Estoque',     grupo: 'operação' },
   { key: 'financeiro',  icon: '💸', label: 'Financeiro',  grupo: 'gestão' },
   { key: 'faturamento', icon: '📈', label: 'Faturamento', grupo: 'gestão' },
   { key: 'relatorio',   icon: '📊', label: 'Relatório',   grupo: 'gestão' },
@@ -282,12 +286,13 @@ export default function App() {
   const [comandas, setComandas]                     = useState([])
   const [cardapio, setCardapio]                     = useState([])
   const [lancamentos, setLancamentos]               = useState([])
+  const [estoque, setEstoque]                       = useState([])
   const [mesaSelecionada, setMesaSelecionada]       = useState(null)
   const [comandaSelecionada, setComandaSelecionada] = useState(null)
   const [modal, setModal]                           = useState(null)
 
   useEffect(() => {
-    let unsubMesas, unsubComandas, unsubCardapio, unsubLanc
+    let unsubMesas, unsubComandas, unsubCardapio, unsubLanc, unsubEstoque
 
     const init = async () => {
       const [cfg, cfgFin] = await Promise.all([getConfig(), getConfigFinanceira()])
@@ -299,11 +304,15 @@ export default function App() {
       unsubComandas = onComandasChange(setComandas)
       unsubCardapio = onCardapioChange(setCardapio)
       unsubLanc     = onLancamentosChange(setLancamentos)
+      unsubEstoque  = onEstoqueChange(setEstoque)
       setIniciando(false)
     }
 
     init()
-    return () => { unsubMesas?.(); unsubComandas?.(); unsubCardapio?.(); unsubLanc?.() }
+    return () => {
+      unsubMesas?.(); unsubComandas?.(); unsubCardapio?.()
+      unsubLanc?.(); unsubEstoque?.()
+    }
   }, [])
 
   if (iniciando) return <Loading />
@@ -363,15 +372,58 @@ export default function App() {
   })
 
   /* ── Financeiro ── */
-  const salvarLancamento = async (l) => saveLancamento(l)
-
+  const salvarLancamento  = async (l) => saveLancamento(l)
   const excluirLancamento = (l) => setModal({
     mensagem: `Deseja excluir "${l.descricao}"?`,
     onConfirmar: async () => { await deleteLancamento(l.id); setModal(null) }
   })
+  const marcarPago = async (l) =>
+    saveLancamento({ ...l, status: l.tipo === 'despesa' ? 'pago' : 'recebido', dataPagamento: new Date().toLocaleDateString('pt-BR') })
 
-  const marcarPago = async (l) => {
-    await saveLancamento({ ...l, status: l.tipo === 'despesa' ? 'pago' : 'recebido', dataPagamento: new Date().toLocaleDateString('pt-BR') })
+  /* ── Estoque ── */
+  const salvarEstoqueProduto = async (p) => saveEstoqueProduto(p)
+
+  const excluirEstoqueProduto = (p) => setModal({
+    mensagem: `Deseja excluir "${p.nome}" do estoque?`,
+    onConfirmar: async () => { await deleteEstoqueProduto(p.id); setModal(null) }
+  })
+
+  const movimentarEstoque = async (produto, movimento) => {
+    // Atualiza quantidade do produto
+    const novaQtd = movimento.tipo === 'entrada'
+      ? produto.qtdAtual + movimento.quantidade
+      : Math.max(0, produto.qtdAtual - movimento.quantidade)
+
+    const produtoAtualizado = { ...produto, qtdAtual: novaQtd }
+    if (movimento.tipo === 'entrada' && movimento.custo > 0) {
+      produtoAtualizado.precoCusto = movimento.custo
+    }
+    await saveEstoqueProduto(produtoAtualizado)
+
+    // Salva o movimento no histórico
+    await saveMovimento({
+      id: String(Date.now()),
+      produtoId: produto.id,
+      produtoNome: produto.nome,
+      ...movimento,
+    })
+
+    // Se foi entrada de estoque, cria lançamento financeiro automaticamente
+    if (movimento.tipo === 'entrada' && movimento.custo > 0) {
+      await saveLancamento({
+        id: String(Date.now() + 1),
+        tipo: 'despesa',
+        categoria: 'estoque',
+        descricao: `Compra: ${produto.nome} (${movimento.quantidade} ${produto.unidade})`,
+        valor: movimento.custo * movimento.quantidade,
+        vencimento: new Date().toISOString().split('T')[0],
+        status: 'pago',
+        dataPagamento: new Date().toLocaleDateString('pt-BR'),
+        recorrente: false,
+        createdAt: new Date().toISOString(),
+        obs: movimento.obs || '',
+      })
+    }
   }
 
   /* ── Navegação ── */
@@ -380,10 +432,11 @@ export default function App() {
     if (destino === 'dashboard') { setMesaSelecionada(null); setComandaSelecionada(null) }
   }
 
-  const info = telaInfo[tela] || telaInfo.dashboard
-
-  // Agrupa navItems por grupo
+  const info   = telaInfo[tela] || telaInfo.dashboard
   const grupos = [...new Set(navItems.map(n => n.grupo))]
+
+  // Alertas de estoque para badge na sidebar
+  const estoqueAlerta = estoque.filter(p => p.qtdAtual <= p.qtdMinima).length
 
   return (
     <div className="app-shell">
@@ -396,9 +449,16 @@ export default function App() {
             <div key={grupo}>
               <div className="sidebar-nav-label">{grupo}</div>
               {navItems.filter(n => n.grupo === grupo).map(item => (
-                <button key={item.key} className={`nav-item${tela === item.key ? ' active' : ''}`} onClick={() => navegar(item.key)}>
+                <button key={item.key}
+                  className={`nav-item${tela === item.key ? ' active' : ''}`}
+                  onClick={() => navegar(item.key)}>
                   <span className="nav-icon">{item.icon}</span>
-                  <span>{item.label}</span>
+                  <span style={{ flex: 1 }}>{item.label}</span>
+                  {item.key === 'estoque' && estoqueAlerta > 0 && (
+                    <span style={{ background: '#DC2626', color: '#fff', borderRadius: 'var(--radius-full)', fontSize: '10px', fontWeight: '700', padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
+                      {estoqueAlerta}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -424,8 +484,7 @@ export default function App() {
             <div className="topbar-sub">{info.sub}</div>
           </div>
           <UserMenu
-            config={config}
-            configFin={configFin}
+            config={config} configFin={configFin}
             onSalvarConfig={async (d) => { await saveConfig(d); setConfig(d) }}
             onSalvarConfigFin={async (d) => { await saveConfigFinanceira(d); setConfigFin(d) }}
           />
@@ -438,7 +497,6 @@ export default function App() {
             onAbrirMesa={(mesa) => { setMesaSelecionada(mesa); setTela('comanda') }}
             onAdicionarMesa={adicionarMesa} onRemoverMesa={removerMesa} />
         )}
-
         {tela === 'comanda' && mesaSelecionada && (
           <Comanda mesa={mesaSelecionada}
             comandas={comandas.filter(c => c.mesaId === mesaSelecionada.id && c.status === 'aberta')}
@@ -448,28 +506,30 @@ export default function App() {
             onFecharConta={(comanda) => { setComandaSelecionada(comanda); setTela('fechar') }}
             onVoltar={() => { setMesaSelecionada(null); setTela('dashboard') }} />
         )}
-
         {tela === 'fechar' && comandaSelecionada && (
           <FecharConta comanda={comandaSelecionada} config={config} configFin={configFin}
             onConfirmar={(fp) => fecharComanda(comandaSelecionada, fp)}
             onVoltar={() => setTela('comanda')} />
         )}
-
         {tela === 'cardapio' && (
           <Cardapio cardapio={cardapio} onSalvar={salvarItemCardapio} onExcluir={excluirItemCardapio} />
         )}
-
         {tela === 'relatorio' && (
           <Relatorio comandas={comandas} config={config} />
         )}
-
         {tela === 'financeiro' && (
           <Financeiro lancamentos={lancamentos}
             onSalvar={salvarLancamento} onExcluir={excluirLancamento} onMarcarPago={marcarPago} />
         )}
-
         {tela === 'faturamento' && (
           <Faturamento comandas={comandas} lancamentos={lancamentos} configFin={configFin} />
+        )}
+        {tela === 'estoque' && (
+          <Estoque
+            estoque={estoque}
+            onSalvar={salvarEstoqueProduto}
+            onExcluir={excluirEstoqueProduto}
+            onMovimentar={movimentarEstoque} />
         )}
       </div>
     </div>
